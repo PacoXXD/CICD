@@ -1,0 +1,114 @@
+name: prd EKS
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "helmfile-prd.yaml"
+      - "prd/**"
+      - "values-prd/**"
+    branches:
+      - master
+
+env:
+  AWS_REGION: eu-central-1 # set this to your preferred AWS region, e.g. us-west-1
+  EKS_CLUSTER: "prd-paco-core-b-v1007" # set this to your Amazon ECS cluster name
+  KUBE_LATEST_VERSION: "v1.23.0"
+  HELM_VERSION: "v3.10.0"
+  HELMFILE_VERSION: "0.145.3"
+  KUBE_CTX_NAME: "prd-paco"
+
+permissions: write-all
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: prd-paco
+
+    steps:
+      - name: Install Kubectl
+        uses: azure/setup-kubectl@v2.0
+        with:
+          version: "${{ env.KUBE_LATEST_VERSION }}" # default is latest stable
+
+      - name: Install Helm
+        uses: azure/setup-helm@v1
+        with:
+          version: "${{ env.HELM_VERSION }}" # default is latest stable
+
+      - name: Install Helmfile plugin
+        run: |
+          helm plugin install https://github.com/hypnoglow/helm-s3.git  --version 0.13.0
+          helm plugin install https://github.com/futuresimple/helm-secrets  --version 2.0.2
+          helm plugin install https://github.com/databus23/helm-diff --version 3.5.0
+
+      - name: Install Helmfile
+        run: |
+          wget https://github.com/helmfile/helmfile/releases/download/v${{ env.HELMFILE_VERSION }}/helmfile_${{ env.HELMFILE_VERSION }}_linux_amd64.tar.gz 
+          tar -zxf helmfile_${{ env.HELMFILE_VERSION }}_linux_amd64.tar.gz
+          mv helmfile /usr/local/bin/helmfile 
+          chmod +x /usr/local/bin/helmfile  
+          
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Congigure AWS EKS
+        run: |
+          aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }} --alias ${{ env.KUBE_CTX_NAME }}
+          kubectl config get-contexts
+
+      # - name: kubernetes-dashboard
+      #   run: |
+      #     helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml  --selector name=kubernetes-dashboard apply
+
+      # - name: prometheus
+      #   run: |
+      #     helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml  --selector name=prometheus --selector name=prometheus-adapter apply
+
+
+      - name: efk
+        run: |
+          helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml  --selector name=fluentd apply
+          helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml  --selector name=elasticsearch apply
+          helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml  --selector name=kibana apply
+
+      # - name: grafana
+      #   run: helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml --selector name=grafana apply
+
+      # - name: metrics-server
+      #   run: helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml --selector name=metrics-server apply
+
+      # - name: cluster-autoscaler
+      #   run: helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml --selector name=cluster-autoscaler apply
+
+      # - name: aws-load-balancer-controller
+      #   run: helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml --selector name=aws-load-balancer-controller apply
+
+
+      # - name: external-dns
+      #   run: |
+      #     helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml --selector name=external-dns-external apply
+      #     helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml --selector name=external-dns-internal apply
+          
+      # - name: aws-efs-csi-driver
+      #   run: helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml --selector name=aws-efs-csi-driver apply
+
+      # - name: workstation-sso
+      #   run: helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml --selector name=workstation-sso apply
+
+      # - name: kube-prometheus-stack
+      #   run: |
+      #     helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml   --selector name=kube-prometheus-stack apply
+
+      - name: descheduler
+        run: helmfile --environment prd-paco-core-b-v1007 --file helmfile-prd.yaml --selector name=descheduler apply
+

@@ -1,0 +1,562 @@
+variables:
+  REPO_NAME: github.com/paco-network/web-neo # This is actually useless even referred later
+  REPO: paco-network/web-neo
+  CHART_NAME: web-neo
+  CHART_NAME_CN: web-neo-cn
+  CHART_NAME_DEV: web-neo-dev
+  COMMIT_SHA: ${CI_COMMIT_SHA}
+  TAG: ${CI_COMMIT_TAG}
+  ECR_NAME_2: web-neo-express
+  ECR_NAME_3: web-neo-nginx
+  ECR_NAME_CN_2: web-neo-express-cn
+  ECR_NAME_CN_3: web-neo-nginx-cn
+  ECR_NAME_DEV_2: web-neo-express-dev
+  ECR_NAME_DEV_3: web-neo-nginx-dev
+  pacoAPP_CHART_NAME: pacoapp
+  SENTRY_ORG: paco
+
+stages:
+  - install
+  - docker
+  - helm
+  - release
+
+image: node:12.22
+
+install:test:
+  retry:
+    max: 2
+    when: runner_system_failure
+  only:
+    refs:
+      - master
+      - tags
+      - dev
+  tags:
+    - kubernetes
+  stage: install
+  before_script:
+    - npm install --prefer-offline --no-audit
+  script:
+    - npm test
+
+install:build:prd:
+  retry:
+    max: 2
+    when: runner_system_failure
+  only:
+    refs:
+      - tags
+    variables:
+      - $CN != "on"
+  tags:
+    - kubernetes
+  stage: install
+  before_script:
+    - npm install --prefer-offline --no-audit
+  script:
+    - npm run build-prd
+    - mv dist dists
+    - npm run ssr:build-prd
+  artifacts:
+    paths:
+      - dist/
+      - dists/
+
+install:build:cn:
+  retry:
+    max: 2
+    when: runner_system_failure
+  only:
+    refs:
+      - tags
+    variables:
+      - $CN == "on"
+  tags:
+    - kubernetes
+  stage: install
+  before_script:
+    - npm install --prefer-offline --no-audit
+  script:
+    - npm run build-cn
+    - mv dist dists
+    - npm run ssr:build-cn
+  artifacts:
+    paths:
+      - dist/
+      - dists/
+
+install:build:dev:
+  retry:
+    max: 2
+    when: runner_system_failure
+  only:
+    refs:
+      - dev
+    variables:
+      - $CN != "on"
+  tags:
+    - kubernetes
+  stage: install
+  before_script:
+    - npm install --prefer-offline --no-audit
+  script:
+    - npm run build-dev
+    - mv dist dists
+    - npm run ssr:build-dev
+  artifacts:
+    paths:
+      - dist/
+      - dists/
+
+install:build:stg:
+  only:
+    variables:
+      - $CN != "on"
+  retry:
+    max: 2
+    when: runner_system_failure
+  except:
+    - tags
+    - l10n_master
+    - dev
+  tags:
+    - kubernetes
+  stage: install
+  before_script:
+    # - rm -rf node_modules
+    - npm install --prefer-offline --no-audit
+  script:
+    - npm run build-stg
+    - mv dist dists
+    - npm run ssr:build-stg
+
+  artifacts:
+    paths:
+      - dists/
+      - dist/
+
+
+docker:prd:express:
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: docker
+  only:
+    refs:
+      - tags
+    variables:
+      - $CN != "on"
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-docker:v0.1.11
+  script:
+    - eval $(aws ecr get-login --no-include-email --region eu-west-1)
+    - docker.sh ${REPOSITORY} ${ECR_NAME_2} ${TAG} "--build-arg NPM_TOKEN=${NPM_TOKEN}" "prd" "Dockerfile-express"
+    - for entry in `ls ./dist/js`; do (echo $entry) done;
+    - echo 'host finished'
+    - touch variables
+    - echo "export DOCKER_TAG=${TAG}" >> variables
+  artifacts:
+    paths:
+      - variables
+docker:prd:nginx:
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: docker
+  only:
+    refs:
+      - tags
+    variables:
+      - $CN != "on"
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-docker:v0.1.11
+  script:
+    - eval $(aws ecr get-login --no-include-email --region eu-west-1)
+    - docker.sh ${REPOSITORY} ${ECR_NAME_3} ${TAG} "--build-arg NPM_TOKEN=${NPM_TOKEN}" "prd" "Dockerfile-nginx"
+    - for entry in `ls ./dist/js`; do (echo $entry) done;
+    - echo 'host finished'
+    - touch variables
+    - echo "export DOCKER_TAG=${TAG}" >> variables
+  artifacts:
+    paths:
+      - variables
+
+docker:cn:express:
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: docker
+  only:
+    refs:
+      - tags
+    variables:
+      - $CN == "on"
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-docker:v0.1.11
+  script:
+    - eval $(aws ecr get-login --no-include-email --region eu-west-1)
+    - docker.sh ${REPOSITORY} ${ECR_NAME_CN_2} ${TAG} "--build-arg NPM_TOKEN=${NPM_TOKEN}" "prd" "Dockerfile-express"
+    - for entry in `ls ./dist/js`; do (echo $entry) done;
+    - echo 'host finished'
+    - touch variables
+    - echo "export DOCKER_TAG=${TAG}" >> variables
+  artifacts:
+    paths:
+      - variables
+docker:cn:nginx:
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: docker
+  only:
+    refs:
+      - tags
+    variables:
+      - $CN == "on"
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-docker:v0.1.11
+  script:
+    - eval $(aws ecr get-login --no-include-email --region eu-west-1)
+    - docker.sh ${REPOSITORY} ${ECR_NAME_CN_3} ${TAG} "--build-arg NPM_TOKEN=${NPM_TOKEN}" "prd" "Dockerfile-nginx"
+    - for entry in `ls ./dist/js`; do (echo $entry) done;
+    - echo 'host finished'
+    - touch variables
+    - echo "export DOCKER_TAG=${TAG}" >> variables
+  artifacts:
+    paths:
+      - variables
+
+docker:stg:express:
+  only:
+    variables:
+      - $CN != "on"
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: docker
+  except:
+    - tags
+    - l10n_master
+    - dev
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-docker:v0.1.11
+  script:
+    - eval $(aws ecr get-login --no-include-email --region eu-west-1)
+    - docker.sh ${REPOSITORY} ${ECR_NAME_2} ${COMMIT_SHA} "--build-arg NPM_TOKEN=${NPM_TOKEN}" "stg" "Dockerfile-express"
+    - touch variables
+    - for entry in `ls ./dist/js`; do (echo $entry) done;
+    - echo 'host finished'
+    - echo "export DOCKER_TAG=${COMMIT_SHA}" >> variables
+  artifacts:
+    paths:
+      - variables
+docker:stg:nginx:
+  only:
+    variables:
+      - $CN != "on"
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: docker
+  except:
+    - tags
+    - l10n_master
+    - dev
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-docker:v0.1.11
+  script:
+    - eval $(aws ecr get-login --no-include-email --region eu-west-1)
+    - docker.sh ${REPOSITORY} ${ECR_NAME_3} ${COMMIT_SHA} "--build-arg NPM_TOKEN=${NPM_TOKEN}" "stg" "Dockerfile-nginx"
+    - touch variables
+    - for entry in `ls ./dist/js`; do (echo $entry) done;
+    - echo 'host finished'
+    - echo "export DOCKER_TAG=${COMMIT_SHA}" >> variables
+  artifacts:
+    paths:
+      - variables
+
+docker:dev:express:
+  only:
+    variables:
+      - $CN != "on"
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: docker
+  except:
+    - tags
+    - l10n_master
+    - master
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-docker:v0.1.11
+  script:
+    - eval $(aws ecr get-login --no-include-email --region eu-west-1)
+    - docker.sh ${REPOSITORY} ${ECR_NAME_DEV_2} ${COMMIT_SHA} "--build-arg NPM_TOKEN=${NPM_TOKEN}" "stg" "Dockerfile-express"
+    - touch variables
+    - for entry in `ls ./dist/js`; do (echo $entry) done;
+    - echo 'host finished'
+    - echo "export DOCKER_TAG=${COMMIT_SHA}" >> variables
+  artifacts:
+    paths:
+      - variables
+
+docker:dev:nginx:
+  only:
+    variables:
+      - $CN != "on"
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: docker
+  except:
+    - tags
+    - l10n_master
+    - master
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-docker:v0.1.11
+  script:
+    - eval $(aws ecr get-login --no-include-email --region eu-west-1)
+    - docker.sh ${REPOSITORY} ${ECR_NAME_CN_3} ${COMMIT_SHA} "--build-arg NPM_TOKEN=${NPM_TOKEN}" "stg" "Dockerfile-nginx"
+    - touch variables
+    - for entry in `ls ./dist/js`; do (echo $entry) done;
+    - echo 'host finished'
+    - echo "export DOCKER_TAG=${COMMIT_SHA}" >> variables
+  artifacts:
+    paths:
+      - variables
+
+helm:stg-prd:
+  retry:
+    max: 2
+    when: runner_system_failure
+  only:
+    refs:
+      - tags
+      - master
+    variables:
+      - $CN != "on"
+    changes:
+      - .helm/**/*
+  tags:
+    - kubernetes
+  stage: helm
+  image: paconetwork/gitlab-stage-helm:v0.1.16
+  script:
+    # read DOCKER_TAG env variable from helm release stage
+    - source variables
+    - CHART_VERSION=$(version.sh $CHART_NAME $CI_COMMIT_SHA $CHART_REPO $CI_COMMIT_TAG)
+    - chart.sh $CHART_NAME $CI_COMMIT_SHA $CHART_REPO $CI_COMMIT_TAG
+    # add CHART_VERSION env variable to variables, which should already contain DOCKER_TAG
+    - echo "export CHART_VERSION=$CHART_VERSION" >> variables
+  dependencies:
+    - docker:stg:express
+    - docker:prd:express
+  artifacts:
+    paths:
+      - variables
+
+helm:dev:
+  retry:
+    max: 2
+    when: runner_system_failure
+  only:
+    refs:
+      - dev
+    variables:
+      - $CN != "on"
+    changes:
+      - .helm/**/*
+  tags:
+    - kubernetes
+  stage: helm
+  image: paconetwork/gitlab-stage-helm:v0.1.16
+  script:
+    # read DOCKER_TAG env variable from helm release stage
+    - source variables
+    - CHART_VERSION=$(version.sh $CHART_NAME_DEV $CI_COMMIT_SHA $CHART_REPO $CI_COMMIT_TAG)
+    - chart.sh $CHART_NAME_DEV $CI_COMMIT_SHA $CHART_REPO $CI_COMMIT_TAG
+    # add CHART_VERSION env variable to variables, which should already contain DOCKER_TAG
+    - echo "export CHART_VERSION=$CHART_VERSION" >> variables
+  dependencies:
+    - docker:dev:express
+  artifacts:
+    paths:
+      - variables
+
+helm:cn:
+  retry:
+    max: 2
+    when: runner_system_failure
+  only:
+    refs:
+      - tags
+      - master
+    variables:
+      - $CN == "on"
+    changes:
+      - .helm/**/*
+  tags:
+    - kubernetes
+  stage: helm
+  image: paconetwork/gitlab-stage-helm:v0.1.16
+  script:
+    # read DOCKER_TAG env variable from helm release stage
+    - source variables
+    - CHART_VERSION=$(version.sh $CHART_NAME_CN $CI_COMMIT_SHA $CHART_REPO $CI_COMMIT_TAG)
+    - chart.sh $CHART_NAME_CN $CI_COMMIT_SHA $CHART_REPO $CI_COMMIT_TAG
+    # add CHART_VERSION env variable to variables, which should already contain DOCKER_TAG
+    - echo "export CHART_VERSION=$CHART_VERSION" >> variables
+  dependencies:
+    - docker:cn:express
+  artifacts:
+    paths:
+      - variables
+
+release:stg:
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: release
+  only:
+    refs:
+      - master
+    variables:
+      - $CN != "on"
+  except:
+    - tags
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-release-stg-multi-image:v0.1.23
+  environment:
+    name: staging/$CI_COMMIT_REF_NAME
+    url: https://github.com/paco-network/paco-app-staging/commits/master
+  before_script:
+    # install github ssh keys
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan github.com >> ~/.ssh/known_hosts
+    - chmod 644 ~/.ssh/known_hosts
+  script:
+    # read CHART_VERSION/DOCKER_TAG env variable from helm build
+    - source variables
+
+    # pull kube-app
+    - pull.sh
+
+    # GRPC
+    - patch_value.sh $CHART_NAME $DOCKER_TAG $pacoAPP_CHART_NAME "nginx,express"
+    - ([[ ! -z "$CHART_VERSION" ]]) && patch_chart.sh $CHART_NAME $CHART_VERSION $pacoAPP_CHART_NAME
+
+    # push
+    - push.sh $CHART_NAME $ECR_NAME_2 $DOCKER_TAG $REPOSITORY
+
+release:dev:
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: release
+  only:
+    refs:
+      - dev
+    variables:
+      - $CN != "on"
+  except:
+    - tags
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-release-stg-multi-image:v0.1.23
+  environment:
+    name: staging/$CI_COMMIT_REF_NAME
+    url: https://github.com/paco-network/paco-app-staging/commits/master
+  before_script:
+    # install github ssh keys
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan github.com >> ~/.ssh/known_hosts
+    - chmod 644 ~/.ssh/known_hosts
+  script:
+    # read CHART_VERSION/DOCKER_TAG env variable from helm build
+    - source variables
+
+    # pull kube-app
+    - pull.sh
+
+    # GRPC
+    - patch_value.sh $CHART_NAME_DEV $DOCKER_TAG $pacoAPP_CHART_NAME "nginx,express"
+    - ([[ ! -z "$CHART_VERSION" ]]) && patch_chart.sh $CHART_NAME_DEV $CHART_VERSION $pacoAPP_CHART_NAME
+
+    # push
+    - push.sh $CHART_NAME_DEV $ECR_NAME_DEV_2 $DOCKER_TAG $REPOSITORY
+
+release:prd:
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: release
+  only:
+    refs:
+      - tags
+    variables:
+      - $CN != "on"
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-release-prd-multi-image:v0.1.3
+  environment:
+    name: production
+    url: https://github.com/paco-network/paco-app-production/pulls
+  before_script:
+    # install github ssh keys
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan github.com >> ~/.ssh/known_hosts
+    - chmod 644 ~/.ssh/known_hosts
+  script:
+    # read CHART_VERSION/DOCKER_TAG env variable from helm build
+    - source variables
+    # promote production env
+    - release.sh $REPO_NAME $CHART_NAME paco-web $CHART_VERSION $DOCKER_TAG $REPOSITORY $pacoAPP_CHART_NAME "nginx,express"
+
+release:cn:
+  retry:
+    max: 2
+    when: runner_system_failure
+  stage: release
+  only:
+    refs:
+      - tags
+    variables:
+      - $CN == "on"
+  tags:
+    - kubernetes
+  image: paconetwork/gitlab-stage-release-prd-multi-image:v0.1.3
+  environment:
+    name: production
+    url: https://github.com/paco-network/paco-app-production/pulls
+  before_script:
+    # install github ssh keys
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - ssh-keyscan github.com >> ~/.ssh/known_hosts
+    - chmod 644 ~/.ssh/known_hosts
+  script:
+    # read CHART_VERSION/DOCKER_TAG env variable from helm build
+    - source variables
+    # promote production env
+    - release.sh $REPO_NAME $CHART_NAME_CN paco-web $CHART_VERSION $DOCKER_TAG $REPOSITORY $pacoAPP_CHART_NAME "nginx,express"

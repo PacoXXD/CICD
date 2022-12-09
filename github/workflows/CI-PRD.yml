@@ -1,0 +1,307 @@
+name: CI-PRD
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  AWS_REGION: eu-west-1
+  HELM_VERSION: "v3.9.0"
+  CHART_REPO: "S3 bucket name"
+
+  ECR_NAME: "paco-pantheon" # AWS ECR directory
+  CHART_NAME: "pantheon" # helm chart name
+
+  MAIN_CHART_NAME_pacoAPP: pacoapp
+  MAIN_CHART_NAME_JOB: jobs
+  MAIN_CHART_NAME_pacoAPP_WS: pacoapp-ws
+  MAIN_CHART_NAME_pacoAPP_DOOR: pacoapp-door
+
+permissions: write-all
+
+jobs:
+  Test:
+    name: test
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:latest
+        ports:
+          - 6379:6379
+      # mysql:
+      #   image: mysql:5.7
+      #   env:
+      #     MYSQL_DATABASE: paco-app-backend_paco_db
+      #     MYSQL_USER: root
+      #     MYSQL_PASSWORD: my-secret
+      #   ports:
+      #     - 3306
+      mongodb:
+        image: mongo:4.0.27
+        ports:
+          - 27017:27017
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.16
+          cache: true
+
+      - name: Install Makefile & Wget
+        run: |
+          sudo apt update
+          sudo apt install make
+          sudo apt install wget
+
+      # - name: Install flyway
+      #   run: |
+      #     wget -qO- https://repo1.maven.org/maven2/org/flywaydb/flyway-commandline/5.2.4/flyway-commandline-5.2.4-linux-x64.tar.gz | tar xvz && export PATH=$PATH:`pwd`/flyway-5.2.4
+      #     flyway --version
+
+      - name: GO test
+        run: make test
+
+  Docker:
+    name: docker
+    runs-on: ubuntu-latest
+    needs: Test
+    outputs:
+      HELM_CHART_SUFFIX: ${{ steps.image-helm-result.outputs.HELM_CHART_SUFFIX }}
+      IMAGE_TAG: ${{ steps.image-helm-result.outputs.IMAGE_TAG }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          ssh-known-hosts: "github.com"
+          ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          submodules: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.16
+          cache: true
+
+      - name: Install Makefile
+        run: |
+          sudo apt update
+          sudo apt install make
+
+      - name: Build
+        run: |
+          export GOFLAGS=-mod=vendor
+          make linux
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STG }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STG }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: tagged docker image by repo new tag (prd)
+        run: |
+          echo "IMAGE_TAG=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+
+      - name: Build, tag, and push the image to Amazon ECR
+        id: build-docker-image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REPOSITORY: ${{ env.ECR_NAME }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          aws s3 cp s3://dlive-stream-registry/paco-prober-v1.0.0 build/prober
+          docker build -t $REGISTRY/$REPOSITORY:$IMAGE_TAG .
+          docker push $REGISTRY/$REPOSITORY:$IMAGE_TAG
+
+      - name: output docker image tag & helm chart version
+        id: image-helm-result
+        env:
+          SHA: ${{ github.sha }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+        run: |
+          echo "::set-output name=HELM_CHART_SUFFIX::${SHA:0:5}"
+          echo "::set-output name=IMAGE_TAG::${IMAGE_TAG}"
+
+  Helm:
+    name: helm
+    runs-on: ubuntu-latest
+    needs: Docker
+    outputs:
+      HELM_CHART_VERSION: ${{ steps.new-chart-version.outputs.HELM_CHART_VERSION }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STG }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STG }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: "${{ env.HELM_VERSION }}"
+
+      - name: repo has new tag(prd)
+        run: |
+          echo "GIT_TAG=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+
+      - name: create new chart version(prd) # e.g. v0.0.1
+        env:
+          GIT_TAG: ${{ env.GIT_TAG }} 
+        run: |
+          echo "CHART_VERSION=$GIT_TAG" >> $GITHUB_ENV 
+
+      - name: Checkout CICD
+        uses: actions/checkout@v3
+        with:
+          repository: "paco-network/CICD"
+          token: ${{ secrets.BOT_GITHUB_TOKEN }}
+          path: CICD
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.7
+
+      - name: install ruamel.yaml
+        run: pip3 install ruamel.yaml==0.15.100
+
+      - name: change Chart.yaml
+        id: new-chart-version
+        env:
+          CHART_NAME: ${{ env.CHART_NAME }}
+          CHART_VERSION: ${{ env.CHART_VERSION }} # e.g. v0.1.5-1ca52
+        run: |
+          python CICD/github-action/helm/patch.py $CHART_NAME $CHART_VERSION
+          cat .helm/$CHART_NAME/Chart.yaml
+
+          echo "::set-output name=HELM_CHART_VERSION::$CHART_VERSION"
+
+      - name: Install helm-s3
+        run: helm plugin install https://github.com/hypnoglow/helm-s3.git  --version 0.10.0
+
+      - name: Package helm and push to Amazon S3 helm repository
+        env:
+          REPOSITORY: ${{ env.CHART_NAME }}
+          CHART_VERSION: ${{ env.CHART_VERSION }}
+          CHART_REPO: ${{ env.CHART_REPO }}
+        run: |
+          helm repo add pacoapp-door $CHART_REPO
+          helm repo list
+          helm repo update
+          helm package .helm/$REPOSITORY
+          helm s3 push ./$REPOSITORY-$CHART_VERSION.tgz pacoapp-door
+
+  Release:
+    name: release
+    runs-on: ubuntu-latest
+    needs: [Helm, Docker]
+    steps:
+      - name: Checkout kube-pacoapp
+        uses: actions/checkout@v3
+        with:
+          repository: "paco-network/kube-pacoapp"
+          fetch-depth: 0
+          token: ${{ secrets.BOT_GITHUB_TOKEN }}
+          path: kube-pacoapp
+
+      - name: Checkout CICD
+        uses: actions/checkout@v3
+        with:
+          repository: "paco-network/CICD"
+          token: ${{ secrets.BOT_GITHUB_TOKEN }}
+          path: CICD
+
+      - name: double check new docker image & helm chart version
+        env:
+          HELM_CHART_VERSION: ${{ needs.Helm.outputs.HELM_CHART_VERSION }}
+          IMAGE_TAG: ${{ needs.Docker.outputs.IMAGE_TAG }}
+        run: |
+          echo $HELM_CHART_VERSION
+          echo $IMAGE_TAG
+
+      - name: config Bot account
+        env:
+          BOT_GITHUB_USERNAME: ${{ secrets.BOT_GITHUB_USERNAME }}
+          BOT_GITHUB_EMAIL: ${{ secrets.BOT_GITHUB_EMAIL }}
+        run: |
+          git config --global user.name $BOT_GITHUB_USERNAME
+          git config --global user.email $BOT_GITHUB_EMAIL
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.7
+
+      - name: install ruamel.yaml
+        run: pip3 install ruamel.yaml==0.15.100
+
+      - name: (prd)new-release(pacoapp)
+        env:
+          CHART_NAME: ${{ env.CHART_NAME }}
+          IMAGE_TAG: ${{ needs.Docker.outputs.IMAGE_TAG }}
+          HELM_CHART_VERSION: ${{ needs.Helm.outputs.HELM_CHART_VERSION }}
+          MAIN_CHART_NAME: ${{ env.MAIN_CHART_NAME_pacoAPP_DOOR }}
+          ECR_NAME: ${{ env.ECR_NAME }}
+          NEW_BRANCH_NAME: ${{ env.NEW_BRANCH_NAME }}
+          SHA: ${{ github.sha }}
+        run: |
+          cd kube-pacoapp
+          NEW_BRANCH_NAME="promote-${CHART_NAME}-${IMAGE_TAG}"
+
+          git checkout -b ${NEW_BRANCH_NAME}
+
+          python ../CICD/github-action/prd-single-image/patch_chart.py $CHART_NAME $HELM_CHART_VERSION $MAIN_CHART_NAME
+          python ../CICD/github-action/prd-single-image/patch_value.py $CHART_NAME $IMAGE_TAG $MAIN_CHART_NAME
+
+          git add prd/${MAIN_CHART_NAME}/values.yaml
+          git add prd/${MAIN_CHART_NAME}/requirements.yaml
+
+          git commit -F- <<EOF
+          Update paco App
+
+          This commit updates the $CHART_NAME deployment container image to:
+
+            $ECR_NAME:$IMAGE_TAG
+
+          COMMIT SHA: $SHA
+          EOF
+
+          echo "NEW_BRANCH_NAME=$NEW_BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Install hub
+        run: |
+          sudo apt update
+          sudo apt install hub
+
+          hub version
+
+      - name: (prd)Create pull request to kube-pacoapp
+        env:
+          NEW_BRANCH_NAME: ${{ env.NEW_BRANCH_NAME }}
+          IMAGE_TAG: ${{ needs.Docker.outputs.IMAGE_TAG }}
+          ECR_NAME: ${{ env.ECR_NAME }}
+          CHART_NAME: ${{ env.CHART_NAME }}
+          GITHUB_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }} # Note: that the default secrets.GITHUB_TOKEN must provide
+        run: |
+          cd kube-pacoapp
+          git push origin $NEW_BRANCH_NAME
+          hub release
+          hub pull-request -m "🤞 $CHART_NAME $IMAGE_TAG promotion ⭐️"
