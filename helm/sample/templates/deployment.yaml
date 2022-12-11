@@ -1,0 +1,146 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "web.fullname" . }}
+  labels:
+    app: {{ include "web.name" . }}
+    chart: {{ include "web.chart" . }}
+    component: "{{ .Values.name }}"
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "web.name" . }}
+      component: "{{ .Values.name }}"
+      release: {{ .Release.Name }}
+  strategy:
+    rollingUpdate: 
+      maxSurge: {{ .Values.maxSurge }}
+      maxUnavailable: {{ .Values.maxUnavailable }}
+    type: {{ .Values.strategyType }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "web.name" . }}
+        component: "{{ .Values.name }}"
+        release: {{ .Release.Name }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/prometheus/metrics"
+        prometheus.io/scheme: "http"
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "true"
+        checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print .Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+    {{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+    {{- end }}
+    {{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+    {{- end }}
+    {{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+    {{- end }}
+      containers:
+        - name: {{ include "web.name" . }}-{{ .Values.nginxName }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sleep","25"]
+          image: "{{ .Values.image.nginx.repository }}:{{ .Values.image.nginx.tag }}"
+          resources:
+{{ toYaml .Values.resources.nginx | indent 12 }}
+          imagePullPolicy: {{ .Values.image.nginx.pullPolicy }}
+          {{- if .Values.readiness.nginx.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.readiness.nginx.path }}
+              port: {{ .Values.readiness.nginx.port }}
+            initialDelaySeconds: {{ .Values.readiness.nginx.delay }}
+            periodSeconds: {{ .Values.readiness.nginx.period }}
+            timeoutSeconds: {{ .Values.readiness.nginx.timeoutSeconds }}
+          {{- end }}
+          {{- if .Values.liveness.nginx.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.liveness.nginx.path }}
+              port: {{ .Values.liveness.nginx.port }}
+            initialDelaySeconds: {{ .Values.liveness.nginx.delay }}
+            periodSeconds: {{ .Values.liveness.nginx.period }}
+            timeoutSeconds: {{ .Values.liveness.nginx.timeoutSeconds }}
+          {{- end }}
+          ports:
+            {{- range $key, $value := .Values.ports.nginx }}
+            - name: {{ $value.name }}
+              containerPort: {{ $value.containerPort }}
+              protocol: {{ $value.protocol }}
+            {{- end }}
+          env:
+            {{- range $key, $value := $.Values.extraEnv }}
+            - name: {{ $key }}
+              value: "{{ $value }}"
+            {{- end }}
+            {{- range $key, $_ := $.Values.webSecrets }}
+            - name: {{ $key | upper }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "web.fullname" $ }}
+                  key: {{ $key }}
+            {{- end }}
+          envFrom:
+          - configMapRef:
+              name: {{ include "web.fullname" . }}
+        - name: {{ include "web.name" . }}-{{ .Values.expressName }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sleep","25"]
+          image: "{{ .Values.image.express.repository }}:{{ .Values.image.express.tag }}"
+          resources:
+{{ toYaml .Values.resources.express | indent 12 }}
+          imagePullPolicy: {{ .Values.image.express.pullPolicy }}
+          {{- if .Values.readiness.express.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.readiness.express.path }}
+              port: {{ .Values.readiness.express.port }}
+            initialDelaySeconds: {{ .Values.readiness.express.delay }}
+            periodSeconds: {{ .Values.readiness.express.period }}
+            timeoutSeconds: {{ .Values.readiness.express.timeoutSeconds }}
+          {{- end }}
+          {{- if .Values.liveness.express.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.liveness.express.path }}
+              port: {{ .Values.liveness.express.port }}
+            initialDelaySeconds: {{ .Values.liveness.express.delay }}
+            periodSeconds: {{ .Values.liveness.express.period }}
+            timeoutSeconds: {{ .Values.liveness.express.timeoutSeconds }}
+          {{- end }}
+          ports:
+            {{- range $key, $value := .Values.ports.express }}
+            - name: {{ $value.name }}
+              containerPort: {{ $value.containerPort }}
+              protocol: {{ $value.protocol }}
+            {{- end }}
+          env:
+            {{- range $key, $value := $.Values.extraEnv }}
+            - name: {{ $key }}
+              value: "{{ $value }}"
+            {{- end }}
+            {{- range $key, $_ := $.Values.webSecrets }}
+            - name: {{ $key | upper }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "web.fullname" $ }}
+                  key: {{ $key }}
+            {{- end }}
+          envFrom:
+          - configMapRef:
+              name: {{ include "web.fullname" . }}

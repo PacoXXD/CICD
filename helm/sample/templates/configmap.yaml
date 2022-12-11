@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: {{ include "web.name" . }}
+    chart: {{ include "web.chart" . }}
+    component: "{{ .Values.name }}"
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+  name: {{ include "web.fullname" . }}
+data:
+{{ toYaml .Values.extraData | indent 2 }}

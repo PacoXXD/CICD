@@ -1,0 +1,106 @@
+nginxName: webnginx
+expressName: webexpress
+nameOverride: ""
+fullnameOverride: ""
+service:
+  type: ClusterIP
+  port: 80
+virtualservice:
+  attempts: 3
+  perTryTimeout: 10s
+resources:
+  nginx:
+    limits:
+      cpu: 10m
+      memory: 64Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+  express:
+    limits:
+      cpu: 10m
+      memory: 64Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+extraEnv: {}
+extraData: {}
+readiness:
+  nginx:
+    enabled: false
+    path: /
+    port: 4012
+    delay: 30
+    period: 10
+    timeoutSeconds: 5
+  express:
+    enabled: false
+    path: /health/ready
+    port: 8080
+    delay: 30
+    period: 10
+    timeoutSeconds: 5
+  # Readiness prob is highly recommended
+liveness:
+  nginx:
+    enabled: false
+    path: /
+    port: 4012
+    delay: 30
+    period: 10
+    timeoutSeconds: 15
+  express:
+    enabled: false
+    path: /health/live
+    port: 8080
+    delay: 30
+    period: 10
+    timeoutSeconds: 15
+  # Liveness prob is highly recommended
+nodeSelector: {}
+tolerations: []
+annotations: {traefik.backend.loadbalancer.stickiness: "true"}
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: component
+            operator: In
+            values: 
+            - "web"
+        topologyKey: kubernetes.io/hostname
+ports:
+  nginx:
+  - name: http
+    containerPort: 80
+    protocol: TCP
+  - name: health
+    containerPort: 4012
+    protocol: TCP
+  express:
+  - name: http
+    containerPort: 8080
+    protocol: TCP
+  # Any ports that you are exposed for other service, or health check purpose
+replicaCount: 1
+maxSurge: 1
+maxUnavailable: 0
+strategyType: RollingUpdate
+image:
+  nginx:
+    repository: "726332586568.dkr.ecr.eu-west-1.amazonaws.com/web-neo-nginx"
+    tag: ""
+    pullPolicy: IfNotPresent
+  express:
+    repository: "726332586568.dkr.ecr.eu-west-1.amazonaws.com/web-neo-express"
+    tag: ""
+    pullPolicy: IfNotPresent
+autoscaler:
+  minReplicas: 1
+  maxReplicas: 2
+  resourceName: cpu
+  targetAverageUtilization: 50
+  targetAverageMemoryUtilization: 50

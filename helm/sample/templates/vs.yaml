@@ -1,0 +1,19 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: {{ include "web.fullname" . }}
+  namespace: linoapp
+spec:
+  hosts:
+  - {{ include "web.fullname" . }}.linoapp.svc.cluster.local
+  http:
+  - appendHeaders:
+      x-envoy-upstream-rq-timeout-ms: "0"
+    retries:
+      attempts: {{ .Values.virtualservice.attempts }}
+      perTryTimeout: {{ .Values.virtualservice.perTryTimeout }}
+    route:
+    - destination:
+        host: {{ include "web.fullname" . }}.linoapp.svc.cluster.local
+      weight: 100
+  
